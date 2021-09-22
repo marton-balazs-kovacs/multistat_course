@@ -1,0 +1,192 @@
+---
+title: "Solution for the assignment of the second class"
+author: "Kovacs Marton"
+date: "9/21/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+bibliography: multistat_references.bib
+---
+
+```{r setup, include=FALSE}
+# markdown settings
+knitr::opts_chunk$set(echo = TRUE)
+# loading necesarry packages
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(psych)
+library(kableExtra)
+#loading custom R functions
+r_scripts <- list.files("R/", full.names = TRUE)
+walk(r_scripts, source)
+```
+
+# Importing data
+
+```{r}
+raw <- read_tsv("data/boldog.txt", locale = locale(encoding = "UTF-8"))
+```
+
+R sometimes have a problem with special characters. I will fix that now.
+
+```{r}
+# first I fix the special Hungarian characters
+Encoding(names(raw)) <- 'latin1'
+# I translate them to English letters for the sake of simplicity
+iconv(names(raw), from = "latin1", to = "ASCII//TRANSLIT")
+```
+
+Also, I like to use _snake_case_ for my variable names, therefore I will transform the variable names.
+
+```{r}
+raw <- janitor::clean_names(raw)
+```
+
+# Data exploration
+
+```{r}
+skimr::skim(raw) %>% 
+  kable()
+```
+
+# Transforming variables
+
+```{r}
+processed <- 
+  raw %>% 
+  mutate(neme = case_when(neme == 1 ~ "ferfi",
+                          neme == 2 ~ "no", 
+                          TRUE ~ NA_character_),
+         isk = case_when(isk == 1 ~ "altalanos",
+                         isk == 2 ~ "kozepiskola",
+                         isk == 3 ~ "foiskola",
+                         isk == 4 ~ "egyetem",
+                         TRUE ~ NA_character_))
+```
+
+# 1. Which variables are intervalum scale variables?
+
+Based on the name of the variables and on a paper focusing on the validation of the MET test (@andras_jollet_2020), I decided that I would consider the following variables are on an interval scale:
+
+```{r, results = "asis"}
+# select variables
+interval_vars <- 
+  processed %>% 
+  select(eletkora, jollet, 26:50) %>% 
+  names()
+
+# print as a bullet list
+cat(paste('-', interval_vars), sep = '\n')
+```
+  
+# 2. & 3. Which of these variables are the least looking like a normal distribution, and which of these are normally distributed?
+
+Plotting each variable.
+
+```{r, message=FALSE, warning=FALSE}
+map(interval_vars, ~ apa_hist(processed, .x))
+```
+
+Looking at the skewness and the kurtosis values. I will use 1.5 and -1.5 as arbitrary cutoff values for indicating a non normal distribution.
+
+```{r}
+tibble(
+  variable = interval_vars,
+  skewness = map_dbl(variable, ~ skew(processed[[.x]])),
+  kurtosis = map_dbl(variable, ~ kurtosi(processed[[.x]])),
+  non_normal = case_when(skewness > 1.5 | skewness < -1.5 | kurtosis > 1.5 | kurtosis < -1.5 ~ "not normal",
+                         TRUE ~ "normal")
+  ) %>% 
+  kable(
+    format = "latex",
+    # booktabs = TRUE,
+    # escape = FALSE,
+    col.names = c("Variable", "Skewness", "Kurtosis", "Normally distributed"),
+    align = c("l", "c", "c", "c"),
+    caption = "Investigation of the Skewness and Kurtosis Values of the interval Variables"
+  ) %>% 
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE)
+```
+
+Based on visual investigation and the kurtosis and skewness values the _eletkora_  variables seems like the most normally distributed variable. Whereas, the _p_ert_cel_ and the _p_telj_ variables are not normally distributed according to the cutoff values.
+
+# 4. Running Kolmogorov-Smirnov tests
+
+I am running two-sided tests with a normal distribution as the cumulative distribution function.
+
+```{r, warning=FALSE}
+tibble(
+  variable = interval_vars,
+  kolmogorov_res = map(interval_vars, ~ ks.test(processed[[.x]], y = "pnorm")),
+  test_statistic = map_chr(kolmogorov_res, "statistic"),
+  p = map_dbl(kolmogorov_res, "p.value")
+  ) %>% 
+  mutate(p = if_else(p == 0, "p < 0.01", as.character(p))) %>% 
+  select(variable, test_statistic, p) %>%
+    kable(
+    format = "latex",
+    # booktabs = TRUE,
+    # escape = FALSE,
+    col.names = c("Variable", "Test statistic", "p"),
+    align = c("l", "c", "c"),
+    caption = "Results of the Kolmogorov-Smirnov Tests"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE)
+```
+
+All tests are significant.
+
+# 5. On which scales do we find the largest difference between male and female? What are the corresponding standardised effectsizes (in Cohens' d and eta square)?
+
+For all of the variables I used the mean of the variable by gender group for the comparison. Also, I am running type 2 ANOVAs to calculate the eta square from.
+
+```{r}
+# creating a function for calculating the mean difference
+gender_mean_diff <- function(var) {
+  processed %>% 
+    group_by(neme) %>% 
+    summarise(mean = mean(.data[[var]], na.rm = TRUE)) %>% 
+    spread(neme, mean) %>% 
+    mutate(diff = no - ferfi) %>% 
+    pull(diff)
+}
+
+# creating function to calculate pooled SD
+gender_sd_pooled <- function(var) {
+  processed %>% 
+    group_by(neme) %>% 
+    summarise(sd = sd(.data[[var]], na.rm = TRUE)) %>% 
+    spread(neme, sd) %>% 
+    mutate(sd_pooled = sqrt((ferfi^2 + no^2)/2)) %>% 
+    pull(sd_pooled)
+}
+
+
+tibble(
+  variable = interval_vars,
+  mean_diff = map_dbl(variable, ~ gender_mean_diff(.x)),
+  sd_pooled = map_dbl(variable, ~ gender_sd_pooled(.x)),
+  cohens_d = mean_diff / sd_pooled,
+  anova_res = map(variable, 
+                  ~ aov(processed[[.x]] ~ processed[["neme"]], data = processed)),
+  eta_squared = map_dbl(anova_res, ~ lsr::etaSquared(.x, type = 2, anova = FALSE)[[1]])
+  ) %>% 
+  select(variable, mean_diff, cohens_d, eta_squared) %>%
+    kable(
+    format = "latex",
+    # booktabs = TRUE,
+    # escape = FALSE,
+    col.names = c("Variable", "Mean difference", "Cohens' d", "Eta-squared"),
+    align = c("l", "c", "c", "c"),
+    caption = "The Corresponding Raw and Standardised Effect Sizes For Each intervalum Variable"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE)
+```
+
+# References {-}
+
+<div id="refs"></div>
