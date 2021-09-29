@@ -1,0 +1,314 @@
+---
+title: "Solution for the assignment of the third class"
+author: "Kovacs Marton"
+date: "9/29/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+bibliography: multistat_references.bib
+---
+
+```{r setup, include=FALSE}
+# markdown settings
+knitr::opts_chunk$set(echo = TRUE)
+# loading necesarry packages
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(psych)
+library(kableExtra)
+library(ez)
+library(WRS2)
+#loading custom R functions
+r_scripts <- list.files("R/", full.names = TRUE)
+walk(r_scripts, source)
+```
+
+# Importing data
+
+```{r}
+raw <- read_tsv("data/boldog.txt", locale = locale(encoding = "UTF-8"))
+```
+
+R sometimes have a problem with special characters. I will fix that now.
+
+```{r}
+# first I fix the special Hungarian characters
+Encoding(names(raw)) <- 'latin1'
+# I translate them to English letters for the sake of simplicity
+iconv(names(raw), from = "latin1", to = "ASCII//TRANSLIT")
+```
+
+Also, I like to use _snake_case_ for my variable names, therefore I will transform the variable names.
+
+```{r}
+raw <- janitor::clean_names(raw)
+```
+
+I will use this dataset for further assignments, so I save the cleaned version in .tsv format.
+
+```{r}
+write_tsv(raw, "data/boldog_raw.tsv")
+```
+
+# Data exploration
+
+```{r}
+skimr::skim(raw) %>% 
+  kable()
+```
+
+# Transforming variables
+
+```{r}
+processed <- 
+  raw %>% 
+  mutate(neme = case_when(neme == 1 ~ "ferfi",
+                          neme == 2 ~ "no", 
+                          TRUE ~ NA_character_),
+         isk = case_when(isk == 1 ~ "altalanos",
+                         isk == 2 ~ "kozepiskola",
+                         isk == 3 ~ "foiskola",
+                         isk == 4 ~ "egyetem",
+                         TRUE ~ NA_character_))
+```
+I will also save this version with the more informative labels for future use.
+
+```{r}
+write_tsv(processed, "data/boldog_processed.tsv")
+```
+
+# 1. On which scales do people differ the most in their education level?
+
+To investigate this question I decided to run several one-way ANOVA tests with the education level as the independent variable, and the different scales as the dependent variable. I will include only interval scales. Then, I will compare the differences with a standardized effect size measure, eta-square. The comparison with the biggest eta-square will be the answer.
+
+Also, I will run the ANOVA tests in bulk in one iteration as I did in the second assignment. This way I can save some time typing, which is always nice. The results will be saved in a table format for an easy comparison. Also, a plot with the different standardized effect sizes would be helpful.
+
+I am running type 2 ANOVA tests.
+
+```{r, warning=FALSE, message=FALSE}
+# Selecting and saving interval scales
+interval_vars <- 
+  processed %>% 
+  select(26:50) %>% 
+  names()
+
+# Converting participant id and isk to factor variable
+isk_scale_data <-
+  processed %>% 
+  mutate(isk = as.factor(isk),
+         index = as.factor(index))
+
+# Checking the order of levels for isk as a factor variable
+levels(processed$isk)
+
+# Function to run the one-way ANOVA
+isk_anova <- function(data, dv_var) {
+  eval(
+    substitute(
+      # The ANOVA
+      ezANOVA(data = data, dv = dv_var, wid = index, between = isk, detailed = TRUE),
+      list(dv_var = dv_var)
+      )
+    )
+}
+
+# Running the ANOVA tests
+isk_scale_res <- 
+  tibble(
+    variable = interval_vars,
+    anova_res =  map(variable,
+                     ~ isk_anova(data = isk_scale_data, dv_var = .x)),
+    f_value = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "F")),
+    p_value = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "p")),
+    generalized_eta_square = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "ges"))
+    ) %>% 
+  select(-anova_res) %>% 
+  arrange(desc(generalized_eta_square))
+
+isk_scale_res %>% 
+  kable(
+    format = "latex",
+    col.names = c("Variable", "F value", "p value", "Generalized Eta-squared"),
+    align = c("l", "c", "c", "c"),
+    caption = "One-way ANOVA Results for Each Scale Variable by Three Education Level"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE) %>% 
+  add_footnote("Results are arranged in descending order by the size of the effec size.")
+```
+
+To answer the question I only consider significant effects. The highest difference between the educational levels were present on the _avhat_ variable which is a subscale of the MET test (@andras_jollet_2020).
+
+Lets see the results on a plot as well.
+
+```{r}
+isk_scale_res %>% 
+  mutate(significant = case_when(p_value <= 0.05 ~ "Significant",
+                                 p_value > 0.05 ~ "Nonsignificant"),
+         variable = fct_reorder(variable, generalized_eta_square)) %>% 
+  ggplot() +
+  aes(x = variable, y = generalized_eta_square, shape = significant) +
+  geom_point(size = 3) +
+  coord_flip() +
+  labs(
+    y = "Eta-squared",
+    x = "Scales",
+    shape = "Significance"
+  ) +
+  papaja::theme_apa() +
+  theme(
+    legend.position = c(.9, .35)
+  )
+```
+
+# 2. On which scales do people differ more if we merge the data of the two lowest educational level?
+
+```{r}
+# Merge the levels
+isk_scale_merged_data <- 
+  processed %>% 
+  mutate(isk = case_when(isk == "altalanos" ~ "altalanos_es_kozepiskola",
+                         isk == "kozepiskola" ~ "altalanos_es_kozepiskola",
+                         TRUE ~ isk),
+         isk = as.factor(isk))
+
+# Running the ANOVA tests
+isk_scale_merged_res <- 
+  tibble(
+    variable = interval_vars,
+    anova_res =  map(variable,
+                     ~ isk_anova(data = isk_scale_merged_data, dv_var = .x)),
+    f_value = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "F")),
+    p_value = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "p")),
+    generalized_eta_square = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "ges"))
+    ) %>% 
+  select(-anova_res) %>% 
+  arrange(desc(generalized_eta_square))
+
+isk_scale_merged_res %>% 
+  kable(
+    format = "latex",
+    col.names = c("Variable", "F value", "p value", "Generalized Eta-squared"),
+    align = c("l", "c", "c", "c"),
+    caption = "One-way ANOVA Results for Each Scale Variable by Education Level"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE) %>% 
+  add_footnote("Results are arranged in descending order by the size of the effec size.")
+```
+
+# Run a two-way ANOVA with educational level and gender on the scale type variables. Is there a scale where the interaction significant? How big is the eta-squared here?
+
+```{r}
+# Converting neme to a factor variable
+isk_scale_merged_data <- 
+  isk_scale_merged_data %>% 
+  mutate(neme = as.factor(neme),
+         index = as.factor(index))
+
+# Function to run the two-way ANOVA
+isk_neme_anova <- function(data, dv_var) {
+  eval(
+    substitute(
+      # The ANOVA
+      ezANOVA(data = data, dv = dv_var, wid = index, between = .(isk, neme), detailed = TRUE),
+      list(dv_var = dv_var)
+      )
+    )
+}
+
+# Running the ANOVA tests
+isk_neme_scale_res <- 
+  tibble(
+    variable = interval_vars,
+    anova_res = map(variable,
+                     ~ isk_neme_anova(data = isk_scale_merged_data, dv_var = .x)[["ANOVA"]]),
+    interaction_res = map(anova_res, . %>% filter(Effect == "isk:neme")),
+    f_value = map_dbl(interaction_res, . %>% pull(F)),
+    p_value = map_dbl(interaction_res, . %>% pull(p)),
+    generalized_eta_square = map_dbl(interaction_res, . %>% pull(ges))
+    ) %>% 
+  select(-anova_res, -interaction_res) %>%
+  arrange(desc(generalized_eta_square))
+
+isk_neme_scale_res %>% 
+  kable(
+    format = "latex",
+    col.names = c("Variable", "F value", "p value", "Generalized Eta-squared"),
+    align = c("l", "c", "c", "c"),
+    caption = "Results of the Interaction Terms of the Two-way ANOVA for Each Scale Variable by Education Level"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE) %>% 
+  add_footnote("Results are arranged in descending order by the size of the effec size.")
+```
+
+# 4. Run the same as before but with a robust equivalent of the ANOVA.
+
+As a robust non-parametric alternative for the two-way ANOVA I will use the medians instead of the means for the calculation.
+
+```{r}
+# Function to run the robust two-way ANOVA
+isk_neme_robust_anova <- function(dv_var) {
+  pbad2way(as.formula(paste(dv_var, "~ isk:neme")), data = isk_scale_merged_data, est = "median")
+}
+
+# Running the ANOVA tests
+isk_neme_scale_robust_res <- 
+  tibble(
+    variable = interval_vars,
+    anova_res = map(variable,
+                     ~ isk_neme_robust_anova(dv_var = .x)),
+    p_value = map_dbl(anova_res, ~pluck(.x, "AB.p.value"))
+    ) %>% 
+  select(-anova_res) %>% 
+  mutate(significance = case_when(p_value <= 0.05 ~ "Significant",
+                                 p_value > 0.05 ~ "Nonsignificant"))
+
+isk_neme_scale_robust_res %>% 
+  kable(
+    format = "latex",
+    col.names = c("Variable", "p value", "Significance"),
+    align = c("l", "c", "c"),
+    caption = "Results of the Interaction Terms of the Robust Two-way ANOVA for Each Scale Variable by Education Level"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE)
+```
+
+# 5. Is there a difference between the means of the subscales of the Globalis Jollet scale?
+
+To answer this question first I select the needed variables and trasnform them to long format.
+
+```{r}
+global_comparison_data <-
+  processed %>% 
+  select(index, g_jpszi, g_jszoc, g_jspir, g_jerzpsz) %>% 
+  gather(key = "subscale", value = "value", -index)
+
+# Running the ANOVA
+ezANOVA(dv = value, wid = index, within = subscale, data = global_comparison_data)
+```
+
+According to the one-way repeated measures ANOVA there is a significant difference between the subscales.
+
+# 6. Two-way mixed ANOVA with the four subscales and gender.
+
+Again, we start with the data transformation.
+
+```{r}
+global_comparison_gender_data <-
+  processed %>% 
+  select(index, neme, g_jpszi, g_jszoc, g_jspir, g_jerzpsz) %>% 
+  gather(key = "subscale", value = "value", -index, -neme)
+
+# Running the ANOVA
+ezANOVA(dv = value, wid = index, within = subscale, between = neme, data = global_comparison_gender_data)
+```
+
+According to the results there is a significant interaction between the subscales and the gender. Also, the subscales have a significant main effect, but not gender.
+
+# References {-}
+
+<div id="refs"></div>
