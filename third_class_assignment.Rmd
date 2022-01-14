@@ -279,7 +279,7 @@ isk_neme_scale_robust_res %>%
 
 # 5. Is there a difference between the means of the subscales of the Globalis Jollet scale?
 
-To answer this question first I select the needed variables and trasnform them to long format.
+To answer this question first I select the needed variables and transform them to long format.
 
 ```{r}
 global_comparison_data <-

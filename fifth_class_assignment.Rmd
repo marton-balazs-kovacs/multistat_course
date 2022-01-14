@@ -1,0 +1,346 @@
+---
+title: "Solution for the assignment of the fourth class"
+author: "Kovacs Marton"
+date: "9/29/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+bibliography: multistat_references.bib
+---
+
+```{r setup, include=FALSE}
+# markdown settings
+knitr::opts_chunk$set(echo = TRUE)
+# loading necesarry packages
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(psych)
+library(kableExtra)
+library(ez)
+library(WRS2)
+library(MBESS)
+library(rstatix)
+library(ARTool)
+library(FSA)
+library(ddst)
+#loading custom R functions
+r_scripts <- list.files("R/", full.names = TRUE)
+walk(r_scripts, source)
+```
+
+# Importing data
+
+```{r}
+processed <- read_tsv("data/boldog_processed.tsv")
+```
+
+# Data exploration
+
+```{r}
+skimr::skim(processed) %>% 
+  kable()
+```
+
+# 1. Which scales differ the most along the four levels of education if we treat them as ordinal scales? How big is the eta-square for each comparison?
+
+For these comparisons I will keep only the ordinal scales, and not the interval scales. I will label a scale as ordinal if there is a low number of levels (less than 10) and the scale only consists of whole numbers.
+
+Therefore, the scales that I will include in this analysis are the following:
+```{r results='asis'}
+ordinal_vars <- select(processed, 8:24) %>% names()
+cat(paste('-', ordinal_vars), sep = '\n')
+```
+
+As education \(_isk_\) has 4 different levels, I will run a Kruskall-Wallis test to investigate the differences between the groups on each scale.
+
+First, I select only the before mentioned variables and convert the educational level variable to a factor variable.
+
+I will also drop all the participants where there are at least a missing value in any of the investigated scales. The number of participants with any missing data `r select(processed, index, 8:24, isk) %>% filter_all(any_vars(is.na(.))) %>% nrow()`.
+
+```{r}
+ordinal_data <- 
+  processed %>% 
+  select(index, 8:24, isk, neme) %>% 
+  mutate(isk = as.factor(isk),
+         index = as.factor(index),
+         neme = as.factor(neme)) %>%
+  filter_all(all_vars(!is.na(.)))
+
+# Checking levels for isk as a factor variable
+# The order does not matter in this case as this is an omnibus test
+levels(ordinal_data$isk)
+```
+
+Then, I will run the analysis iteratively on each variable. I will also compute the summary statistics for each scale as well.
+
+I will also calculate the eta squared for the Kruskall Wallis test. The eta squared will be based on the H statistics (sometimes called epsilon squared). I will also add the possibility calculate the CIs by using a boostrapping method.
+
+```{r}
+# Function to run the Kruskall Wallis test
+kruskall_iterate <- function(data, scale_var) {
+      kruskal.test(data[[scale_var]] ~ data[["isk"]])
+}
+
+# Summary stats function
+ordinal_summary_stats <- function(data, scale_var) {
+  data %>% 
+    group_by(isk) %>% 
+    summarise(median = median(.data[[scale_var]], na.rm = TRUE),
+              iqr = IQR(.data[[scale_var]], na.rm = TRUE),
+              n = n()
+              )
+}
+
+# Function to calculate the effect size
+h_eta_square <- function(data, scale_var, ci) {
+      rstatix::kruskal_effsize(data, data[[scale_var]] ~ data[["isk"]], ci = ci)
+}
+
+# Run the analysis
+ordinal_res <- 
+  tibble::tibble(
+    variable = ordinal_vars,
+    kruskal_res = map(variable,
+                     ~ kruskall_iterate(data = ordinal_data, scale_var = .x)),
+    statistic = map_dbl(kruskal_res,  ~ pluck(.x, "statistic", 1)),
+    p_value = map_dbl(kruskal_res,  ~ pluck(.x, "p.value")),
+    df = map_dbl(kruskal_res,  ~ pluck(.x, "parameter", 1)),
+    summary_stats = map(variable,
+                        ~ ordinal_summary_stats(
+                          data = ordinal_data,
+                          scale_var = .x
+                          )),
+    effect_size_res = map(variable, 
+                          ~ h_eta_square(
+                              data = ordinal_data,
+                              scale_var = .x,
+                              FALSE)
+                          ),
+    eta_squared = map_dbl(effect_size_res, ~pluck(.x, "effsize"))
+  )
+```
+
+```{r}
+ordinal_summary <-
+  ordinal_res %>% 
+  select(variable, summary_stats) %>%
+  mutate(summary_stats = map2(variable, summary_stats, ~mutate(.y, variable = .x) %>% select(variable, everything())))
+
+
+map_df(ordinal_summary$summary_stats, bind_rows) %>% 
+  kable(
+    format = "latex",
+    col.names = c("Variable", "Level of Education", "Median", "IQR", "N"),
+    align = c("l", "c", "c", "c", "c"),
+    caption = "Summary Statistics for the Investigated Scales"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE)
+```
+
+```{r}
+ordinal_res %>% 
+  select(variable, statistic, p_value, eta_squared) %>% 
+  arrange(desc(eta_squared)) %>%
+  kable(
+    format = "latex",
+    col.names = c("Variable", "Test statistic", "P value", "Rank Eta Squared"),
+    align = c("l", "c", "c"),
+    caption = "Results of the Kruskall Wallis Tests"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE) %>% 
+  add_footnote("Results are arranged in descending order by the size of the effec size.")
+```
+
+The difference was the biggest for the _diener1_ scale with an effect size of `r ordinal_res %>% dplyr::filter(variable == "diener1") %>% pull(eta_squared)`.
+
+# 2. Which scales differ the most along the three levels of education if we treat them as ordinal scales? How big is the eta-square for each comparison?
+
+The N for one level of education (elementary school) is quite low, so it make sense to group participants belonging to elementary and highschool. After relabelling the data we will take a look at the differences on these ordinal scales again.
+
+```{r}
+# Merge the levels
+ordinal_merged_data <- 
+  processed %>% 
+  select(index, 8:24, isk, neme) %>% 
+  mutate(isk = case_when(isk == "altalanos" ~ "altalanos_es_kozepiskola",
+                         isk == "kozepiskola" ~ "altalanos_es_kozepiskola",
+                         TRUE ~ isk),
+         isk = as.factor(isk),
+         index = as.factor(index),
+         neme = as.factor(neme)) %>%
+  filter_all(all_vars(!is.na(.)))
+
+# Run the analysis
+ordinal_merged_res <- 
+  tibble::tibble(
+    variable = ordinal_vars,
+    kruskal_res = map(variable,
+                     ~ kruskall_iterate(data = ordinal_merged_data, scale_var = .x)),
+    statistic = map_dbl(kruskal_res,  ~ pluck(.x, "statistic", 1)),
+    p_value = map_dbl(kruskal_res,  ~ pluck(.x, "p.value")),
+    df = map_dbl(kruskal_res,  ~ pluck(.x, "parameter", 1)),
+    summary_stats = map(variable, ~ 
+                          ordinal_summary_stats(
+                            data = ordinal_merged_data,
+                            scale_var = .x
+                          )),
+    effect_size_res = map(variable, 
+                          ~ h_eta_square(
+                            data = ordinal_merged_data,
+                            scale_var = .x,
+                            FALSE)),
+    eta_squared = map_dbl(effect_size_res, ~pluck(.x, "effsize"))
+  )
+```
+
+```{r}
+ordinal_merged_res %>% 
+  select(variable, statistic, p_value, eta_squared) %>% 
+  arrange(desc(eta_squared)) %>% 
+  kable(
+    format = "latex",
+    col.names = c("Variable", "Test statistic", "P value", "Rank Eta Squared"),
+    align = c("l", "c", "c"),
+    caption = "Results of the Kruskall Wallis Tests Comparing the Three Levels of Education on Each Investigated Ordinal Scale"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE) %>% 
+  add_footnote("Results are arranged in descending order by the size of the effec size.")
+```
+
+Still the _diener1_ scale has the biggest effect size with `r ordinal_res %>% dplyr::filter(variable == "diener1") %>% pull(eta_squared)` eta squared.
+
+# 3. Run a two-way ANOVA with educational level and gender on the scale type variables. Is there a scale where the interaction significant? How big is the eta-squared here?
+
+Kruskal-Wallis cannot be used to calculate interactions. One option would be using ordinal logistic regression. While every ANOVA is a regression behind the scenes, I will try to stick to an ANOVA. I will try out an Aligned Rank Transformation ANOVA.
+
+```{r}
+# For running the analysis we have to first transform the data
+ordinal_interaction_res <- 
+  tibble::tibble(
+    variable = ordinal_vars,
+    art_trans = map(variable,
+                     ~ art(ordinal_merged_data[[.x]] ~ neme*isk, data = ordinal_merged_data)))
+```
+
+First, we transformed the data. We have to see 0 for the variables of interest to be able to apply ART ANOVA.
+
+The ART tool automatically runs the correct ANOVA on the transformed data which is nice.
+
+To calculate the partial eta squared effect size measure we will use the sums of squares.
+
+```{r}
+# Running the analysis
+ordinal_interaction_res <-
+  ordinal_interaction_res %>% 
+  mutate(
+    art_re = map(art_trans, ~ anova(.x)),
+    f_value_int = map_dbl(art_re, 
+                          ~filter(.x, Term == "neme:isk") %>% pull(`F value`)),
+    p_value_int = map_dbl(art_re, 
+                          ~filter(.x, Term == "neme:isk") %>% pull(`Pr(>F)`)),
+    df_int = map_dbl(art_re, 
+                          ~filter(.x, Term == "neme:isk") %>% pull(`Df`)),
+    df_res_int = map_dbl(art_re, 
+                          ~filter(.x, Term == "neme:isk") %>% pull(`Df.res`)),
+    sum_square_int = map_dbl(art_re, 
+                          ~filter(.x, Term == "neme:isk") %>% pull(`Sum Sq`)),
+    sum_square_res_int = map_dbl(art_re, 
+                          ~filter(.x, Term == "neme:isk") %>% pull(`Sum Sq.res`)),
+    partial_eta_square_int = sum_square_int / (sum_square_int + sum_square_res_int)
+    )
+
+ordinal_interaction_res %>% 
+  select(variable, f_value_int, p_value_int, df_int, df_res_int, partial_eta_square_int) %>% 
+  arrange(desc(partial_eta_square_int)) %>% 
+  kable(
+    format = "latex",
+    col.names = c("Variable", "F Value", "P Value", "Df", "Df Residuals", "Partial Eta Squared"),
+    align = c("l", "c", "c", "c", "c", "c"),
+    caption = "Results of the Two-way ART ANOVA with Comparing the Interaction Between Three Levels of Education and Gender on Each Investigated Ordinal Scale"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE) %>% 
+  add_footnote("Results are arranged in descending order by the size of the effec size.")
+```
+
+
+EXPLAIN
+
+# 4. Is there a difference between the means of the subscales of the Globalis Jollet scale?
+
+To answer this question first I select the needed variables and transform them to long format.
+
+```{r}
+global_comparison_data <-
+  processed %>% 
+  select(index, g_jpszi, g_jszoc, g_jspir, g_jerzpsz) %>% 
+  gather(key = "subscale", value = "value", -index) %>% 
+  mutate(index = as.factor(index))
+```
+
+We will use the Kruskal-Wallis test for testing the ordinal scales. 
+
+```{r}
+# Run the analysis
+kruskal.test(global_comparison_data$value ~ global_comparison_data$subscale)
+```
+
+The comparison between the subscales of the Globalis Jollet scale is significant indicating a difference between the rank means of the subscales.
+
+Therefore, we can run post hoc tests. We are going to perform a Dunn test with Holm method adjusting for family error rate.
+
+```{r}
+dunnTest(global_comparison_data$value ~ global_comparison_data$subscale, data = global_comparison_data)
+```
+
+The p values are indicating a significant difference between all of the subscales with the _g_jszoc_ subscale with _alpha_ = 0.05.
+
+# 5. On which scales can we find the biggest difference between man and woman in stohastic dominance?
+
+To test for the stochastic dominance we first have to transform the data so that all observations from the male participants are in one vector for the given scale, and all observations for the female participants in another vector for the given scale. We will do this nested, so we can run the analysis for each investigated variable in bulk.
+
+We are comparing only the ordinal variables described at the beginning of this assignment. We also drop all the participants where there is at least one missing observation.
+
+```{r}
+transform_scales <- function(var) {
+  select(ordinal_data, neme, .data[[var]]) %>% 
+    pivot_wider(names_from = neme, values_from = .data[[var]])
+}
+
+sto_dom_data <-
+  tibble::tibble(
+    variable = ordinal_vars,
+    data = map(variable, transform_scales)
+  )
+```
+
+Now, we can run the test for stohastic dominance in two samples. We are using _alpha_ = 0.05, and 1e+05 iterations for calculating the p value. The alpha dependent tuning parameter will be 2.2.
+
+```{r}
+sto_dom_res <-
+  tibble::tibble(
+    res = map(sto_dom_data$data,
+              ~ ddst.forstochdom.test(.x$ferfi[[1]], .x$no[[1]], t = 2.2, compute.p = TRUE)),
+    plot = map(res, plot)
+  )
+```
+
+The results.
+
+```{r}
+sto_dom_res$res
+```
+
+Plotting the results.
+
+```{r}
+sto_dom_res$plot
+```
+
+# References {-}
+
+<div id="refs"></div>

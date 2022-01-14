@@ -1,0 +1,174 @@
+---
+title: "Solution for the assignment of the fourth class"
+author: "Kovacs Marton"
+date: "9/29/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+bibliography: multistat_references.bib
+---
+
+```{r setup, include=FALSE}
+# markdown settings
+knitr::opts_chunk$set(echo = TRUE)
+# loading necesarry packages
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(psych)
+library(kableExtra)
+library(ez)
+library(WRS2)
+library(GPArotation)
+library(MBESS)
+library(rstatix)
+library(ARTool)
+library(FSA)
+library(ddst)
+library(Hmisc)
+library(ltm)
+#loading custom R functions
+r_scripts <- list.files("R/", full.names = TRUE)
+walk(r_scripts, source)
+```
+
+# Importing data
+
+```{r}
+processed <- read_tsv("data/boldog_processed.tsv")
+```
+
+# Data exploration
+
+```{r}
+skimr::skim(processed) %>% 
+  kable()
+```
+
+# 1. What are the correlations and rank correlations between Globalis Jollet Scale and MET?
+
+First I create a table for all the combinations between the variables.
+
+```{r}
+global <- select(processed, 31:36) %>% names()
+met <- select(processed, 25:29) %>% names
+correlation_res <- tidyr::crossing(global, met)
+```
+
+The I calculate the parametric correlation for each combination with a Pearson correlation, and the rank correlation with the Spearman method.
+
+```{r}
+my_cor <- function(data, x, y, method) {
+  cor.test(data[[x]], data[[y]], method = method)
+}
+
+correlation_res <-
+  correlation_res %>% 
+  mutate(
+    pearson_res = map2(global, met, 
+                     ~ my_cor(
+                        data = processed,
+                        x = .x,
+                        y = .y,
+                        method = "pearson")),
+    pearson_r = map_dbl(pearson_res, ~ pluck(.x, "estimate", "cor")),
+    pearson_p = map_dbl(pearson_res, ~ pluck(.x, "p.value")),
+    spearman_res = map2(global, met, 
+                     ~ my_cor(
+                        data = processed,
+                        x = .x,
+                        y = .y,
+                        method = "spearman")),
+    spearman_r = map_dbl(spearman_res, ~ pluck(.x, "estimate", "rho")),
+    spearman_p = map_dbl(spearman_res, ~ pluck(.x, "p.value")),
+  )
+
+correlation_res %>% 
+  select(-pearson_res, -spearman_res) %>% 
+  arrange(desc(pearson_r))
+```
+
+The highest correlation was between _gjerz_ and the _jollet_ scales.
+
+# 2. Find scales that are in a non-linear relationship with any of the subscales of MET.
+
+# 3. What is the proportion of the negative and positive relationships between the resiliance scale and the total score of the Diener scale.
+
+To answer the question we first calculate the total score of the diener scale.
+
+```{r}
+diener_rezil_data <-
+  processed %>% 
+  mutate(diener_sum = diener1 + diener2 + diener3 + diener4 + diener5 + diener6 + diener7 + diener8) %>% 
+  select(rezil, diener_sum)
+```
+
+# 4. How big is the Cronbachs alpha for the total score of the Diener scale?
+
+```{r}
+diener_data <-
+  processed %>% 
+  dplyr::select(contains("diener"))
+
+cronbach.alpha(diener_data, CI = TRUE)
+```
+
+# 5. Same for each gender group.
+
+```{r}
+diener_male_data <-
+  processed %>% 
+  filter(neme == "ferfi") %>% 
+  dplyr::select(contains("diener"))
+
+cronbach.alpha(diener_male_data, CI = TRUE)
+
+diener_female_data <-
+  processed %>% 
+  filter(neme == "no") %>% 
+  dplyr::select(contains("diener"))
+
+cronbach.alpha(diener_female_data, CI = TRUE)
+```
+
+# 6. How big is the Mcdonalds' omega for the Diener flourishing scale?
+
+```{r}
+psych::omega(diener_data, nfactors = 1)
+```
+
+# 7. How big is the Cronbachs alpha and Mcdonalds' omega for the scale consisting of the Testi_fi, Áltlelki, Áltegáll, Fizerö, Arcocska, Aggodalo, Ideges, Feszült, Nyugtalan items?
+
+Some of the items are on reversed scales so we have to reverse them. To run the analyses I also have to drop missing items.
+
+```{r}
+scale_data <-
+  processed %>% 
+  dplyr::select(8:16) %>% 
+  filter_all(all_vars(!is.na(.)))
+
+# Looking at the maximum values for each scale
+scale_data %>% 
+  summarise_all(max, na.rm = TRUE)
+
+# I only suspect that if these items belong to the same scale the maximum value for all of them is 7
+reverse <- function(x) {
+    7 - x
+}
+
+scale_data <-
+  scale_data %>% 
+  mutate_at(vars(arcocska, aggodalo, ideges, feszult, nyugtala), reverse)
+```
+
+We can now calculate the Cronbachs alpha and Mcdonalds' omega. For calculating the omega, I propose that the items are grouped into one factor.
+
+```{r}
+cronbach.alpha(scale_data, CI = TRUE)
+
+psych::omega(scale_data, nfactors = 1)
+```
+
+# References {-}
+
+<div id="refs"></div>

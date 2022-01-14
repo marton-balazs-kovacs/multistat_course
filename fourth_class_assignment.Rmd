@@ -1,0 +1,368 @@
+---
+title: "Solution for the assignment of the fourth class"
+author: "Kovacs Marton"
+date: "9/29/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+bibliography: multistat_references.bib
+---
+
+```{r setup, include=FALSE}
+# markdown settings
+knitr::opts_chunk$set(echo = TRUE)
+# loading necesarry packages
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(psych)
+library(kableExtra)
+library(ez)
+library(WRS2)
+library(MBESS)
+#loading custom R functions
+r_scripts <- list.files("R/", full.names = TRUE)
+walk(r_scripts, source)
+```
+
+# Importing data
+
+```{r}
+processed <- read_tsv("data/boldog_processed.tsv")
+```
+
+# Data exploration
+
+```{r}
+skimr::skim(processed) %>% 
+  kable()
+```
+
+_The first three tasks are the same tasks as in assignment three. However, here, I supplement the analysis with confidence intervals and figures of the means._
+
+# 1. On which scales do people differ the most in their education level?
+
+To investigate this question I decided to run several one-way ANOVA tests with the education level as the independent variable, and the different scales as the dependent variable. I will include only interval scales. Then, I will compare the differences with a standardized effect size measure, eta-square. The comparison with the biggest eta-square will be the answer.
+
+Also, I will run the ANOVA tests in bulk in one iteration as I did in the second assignment. This way I can save some time typing, which is always nice. The results will be saved in a table format for an easy comparison. Also, a plot with the different standardized effect sizes would be helpful.
+
+I am running type 2 ANOVA tests.
+
+```{r, warning=FALSE, message=FALSE}
+# Selecting and saving interval scales
+interval_vars <- 
+  processed %>% 
+  select(26:50) %>% 
+  names()
+
+# Converting participant id and isk to factor variable
+isk_scale_data <-
+  processed %>% 
+  mutate(isk = as.factor(isk),
+         index = as.factor(index))
+
+# Checking the order of levels for isk as a factor variable
+levels(isk_scale_data$isk)
+
+# Function to run the one-way ANOVA
+isk_anova <- function(data, dv_var) {
+  eval(
+    substitute(
+      # The ANOVA
+      ezANOVA(data = data, dv = dv_var, wid = index, between = isk, detailed = TRUE),
+      list(dv_var = dv_var)
+      )
+    )
+}
+
+isk_means <- function(var) {
+  isk_scale_data %>% 
+    group_by(isk) %>% 
+    summarise(mean = mean(.data[[var]]),
+              sd = sd(.data[[var]]),
+              n = n(),
+              se = sd / sqrt(n),
+              ci_lower = mean - 1.96 * se,
+              ci_upper = mean + 1.96 * se)
+}
+
+# Running the ANOVA tests
+isk_scale_res <- 
+  tibble(
+    variable = interval_vars,
+    anova_res =  map(variable,
+                     ~ isk_anova(data = isk_scale_data, dv_var = .x)),
+    f_value = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "F")),
+    dfn = map_dbl(anova_res, ~ pluck(.x, 2, "DFn")),
+    dfd = map_dbl(anova_res, ~ pluck(.x, 2, "DFd")),
+    p_value = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "p")),
+    generalized_eta_square = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "ges")),
+    means = map(variable, isk_means)
+    ) %>% 
+  mutate(
+    ci = MBESS::ci.pvaf(F.value = f_value, df.1 = dfn, df.2 = dfd, N = 500, conf.level=.95)
+    ) %>% 
+  arrange(desc(generalized_eta_square))
+
+isk_scale_res %>% 
+  select(-anova_res, -means, -dfd, -dfn) %>%
+  kable(
+    format = "latex",
+    col.names = c("Variable", "F value", "p value", "Generalized Eta-squared", "CI"),
+    align = c("l", "c", "c", "c","c"),
+    caption = "One-way ANOVA Results for Each Scale Variable by Three Education Level"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE) %>% 
+  add_footnote("Results are arranged in descending order by the size of the effec size.")
+```
+
+The figures show the each education level on the X axis and the corresponding scale on the Y axis. The errobars are the 95% confidence intervals.
+
+```{r}
+apa_pointplot <- function(data, scale_name) {
+  data %>%
+    unnest() %>% 
+    ggplot2::ggplot() +
+    ggplot2::aes(x = isk, y = mean) +
+    ggplot2::geom_point(size = 4) +
+    ggplot2::geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = .5) +
+    ggplot2::labs(y = scale_name) +
+    papaja::theme_apa()
+}
+
+map2(isk_scale_res$means, isk_scale_res$variable, ~ apa_pointplot(.x, .y))
+```
+
+To answer the question I only consider significant effects. The highest difference between the educational levels were present on the _avhat_ variable which is a subscale of the MET test (@andras_jollet_2020).
+
+Lets see the results on a plot as well.
+
+```{r}
+isk_scale_res %>% 
+  mutate(significant = case_when(p_value <= 0.05 ~ "Significant",
+                                 p_value > 0.05 ~ "Nonsignificant"),
+         variable = fct_reorder(variable, generalized_eta_square)) %>% 
+  ggplot() +
+  aes(x = variable, y = generalized_eta_square, shape = significant) +
+  geom_point(size = 3) +
+  coord_flip() +
+  labs(
+    y = "Eta-squared",
+    x = "Scales",
+    shape = "Significance"
+  ) +
+  papaja::theme_apa() +
+  theme(
+    legend.position = c(.9, .35)
+  )
+```
+
+# 2. On which scales do people differ more if we merge the data of the two lowest educational level?
+
+```{r}
+# Merge the levels
+isk_scale_merged_data <- 
+  processed %>% 
+  mutate(isk = case_when(isk == "altalanos" ~ "altalanos_es_kozepiskola",
+                         isk == "kozepiskola" ~ "altalanos_es_kozepiskola",
+                         TRUE ~ isk),
+         isk = as.factor(isk))
+
+# Running the ANOVA tests
+isk_scale_merged_res <- 
+  tibble(
+    variable = interval_vars,
+    anova_res =  map(variable,
+                     ~ isk_anova(data = isk_scale_merged_data, dv_var = .x)),
+    f_value = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "F")),
+    dfn = map_dbl(anova_res, ~ pluck(.x, 2, "DFn")),
+    dfd = map_dbl(anova_res, ~ pluck(.x, 2, "DFd")),
+    p_value = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "p")),
+    generalized_eta_square = map_dbl(anova_res, ~ pluck(.x, "ANOVA", "ges")),
+    means = map(variable, isk_means)
+    ) %>% 
+  mutate(
+    ci = MBESS::ci.pvaf(F.value = f_value, df.1 = dfn, df.2 = dfd, N = 500, conf.level=.95)
+    ) %>% 
+  arrange(desc(generalized_eta_square))
+
+isk_scale_merged_res %>% 
+  select(-anova_res, -means, -dfd, -dfn) %>%
+  kable(
+    format = "latex",
+    col.names = c("Variable", "F value", "p value", "Generalized Eta-squared", "CI"),
+    align = c("l", "c", "c", "c", "c"),
+    caption = "One-way ANOVA Results for Each Scale Variable by Education Level"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE) %>% 
+  add_footnote("Results are arranged in descending order by the size of the effec size.")
+```
+
+The figures show the each education level on the X axis and the corresponding scale on the Y axis. The errobars are the 95% confidence intervals. Interestingly, the CIs for the 'altalanos' educational level are wide as the N is low for this group.
+
+```{r}
+apa_pointplot <- function(data, scale_name) {
+  data %>%
+    unnest() %>% 
+    ggplot2::ggplot() +
+    ggplot2::aes(x = isk, y = mean) +
+    ggplot2::geom_point(size = 4) +
+    ggplot2::geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = .5) +
+    ggplot2::labs(y = scale_name) +
+    papaja::theme_apa()
+}
+
+map2(isk_scale_merged_data$means, isk_scale_merged_data$variable, ~ apa_pointplot(.x, .y))
+```
+
+# 3. Run a two-way ANOVA with educational level and gender on the scale type variables. Is there a scale where the interaction significant? How big is the eta-squared here?
+
+```{r}
+# Converting neme to a factor variable
+isk_scale_merged_data <- 
+  isk_scale_merged_data %>% 
+  mutate(neme = as.factor(neme),
+         index = as.factor(index))
+
+# Function to run the two-way ANOVA
+isk_neme_anova <- function(data, dv_var) {
+  eval(
+    substitute(
+      # The ANOVA
+      ezANOVA(data = data, dv = dv_var, wid = index, between = .(isk, neme), detailed = TRUE),
+      list(dv_var = dv_var)
+      )
+    )
+}
+
+# Running the ANOVA tests
+isk_neme_scale_res <- 
+  tibble(
+    variable = interval_vars,
+    anova_res = map(variable,
+                     ~ isk_neme_anova(data = isk_scale_merged_data, dv_var = .x)[["ANOVA"]]),
+    interaction_res = map(anova_res, . %>% filter(Effect == "isk:neme")),
+    f_value = map_dbl(interaction_res, . %>% pull(F)),
+    p_value = map_dbl(interaction_res, . %>% pull(p)),
+    generalized_eta_square = map_dbl(interaction_res, . %>% pull(ges))
+    ) %>% 
+  arrange(desc(generalized_eta_square))
+
+isk_neme_scale_res %>% 
+  select(-anova_res, -interaction_res) %>%
+  kable(
+    format = "latex",
+    col.names = c("Variable", "F value", "p value", "Generalized Eta-squared"),
+    align = c("l", "c", "c", "c"),
+    caption = "Results of the Interaction Terms of the Two-way ANOVA for Each Scale Variable by Education Level and Gender"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE) %>% 
+  add_footnote("Results are arranged in descending order by the size of the effec size.")
+```
+
+# 4. Is there a difference between the means of the subscales of the Globalis Jollet scale?
+
+To answer this question first I select the needed variables and trasnform them to long format.
+
+```{r}
+global_comparison_data <-
+  processed %>% 
+  select(index, g_jpszi, g_jszoc, g_jspir, g_jerzpsz) %>% 
+  gather(key = "subscale", value = "value", -index)
+```
+
+_The means and SDs of each subscale._
+
+```{r}
+global_comparison_data %>% 
+  group_by(subscale) %>% 
+  summarise(mean = mean(value),
+            sd = sd(value),
+            n = n(),
+            se = sd / sqrt(n),
+            ci_lower = mean - 1.96 * se,
+            ci_upper = mean + 1.96 * se)
+```
+
+Running the ANOVA.
+
+```{r}
+ezANOVA(dv = value, wid = index, within = subscale, data = global_comparison_data)
+```
+
+According to the one-way repeated measures ANOVA there is a significant difference between the subscales.
+
+_Therefore, I can now run posthoc analyses. I use the Bonferroni correction to control the family-wise error rates._
+
+```{r}
+pairwise.t.test(global_comparison_data$value, global_comparison_data$subscale, p.adj = "bonf")
+```
+
+_The results of the pairwise pot-hoc comparisons shows that only "g_jszoc " differed significantly from all of the other subscales._
+
+# 5. Two-way ANOVA on the five subscales of MET with gender and educational level as between subject factors, and control for age and financial state as covariants.
+
+The data transformation for this analysis was done previously by converting gender and educational level to factor variables and merging the two lowest N levels of the educational level.
+
+The ezANOVA function automatically controls for the covariates supplied in the _between_covariates_ argument.
+
+When interpreting the results we have to take into account the group sizes are unbalanced.
+
+```{r}
+# Function to run the two-way ANOVA
+isk_neme_cov_anova <- function(data, dv_var) {
+  eval(
+    substitute(
+      # The ANOVA
+      ezANOVA(data = data, dv = dv_var, wid = index, between = .(isk, neme), between_covariates = .(eletkora, anyagi) ,detailed = TRUE),
+      list(dv_var = dv_var)
+      )
+    )
+}
+
+met_subscales <- c("jollet", "savor", "a_vhat", "onreg", "rezil")
+
+# Running the ANOVA tests
+isk_neme_anova_cov_res <- 
+  tibble(
+    variable = met_subscales,
+    anova_res = map(variable,
+                     ~ isk_neme_cov_anova(data = isk_scale_merged_data, dv_var = .x)[["ANOVA"]]),
+    interaction_res = map(anova_res, . %>% filter(Effect == "isk:neme")),
+    f_value = map_dbl(interaction_res, . %>% pull(F)),
+    p_value = map_dbl(interaction_res, . %>% pull(p)),
+    generalized_eta_square = map_dbl(interaction_res, . %>% pull(ges))
+    ) %>% 
+  arrange(desc(generalized_eta_square))
+
+isk_neme_anova_cov_res %>% 
+  select(-anova_res, -interaction_res) %>%
+  kable(
+    format = "latex",
+    col.names = c("Variable", "F value", "p value", "Generalized Eta-squared"),
+    align = c("l", "c", "c", "c"),
+    caption = "Results of the Interaction Terms of the Two-way ANOVA for Each Scale Variable by Education Level and Gender and by Controlling for Age and Financial Level Covariants"
+  ) %>%
+  row_spec(row = 0, align = "c") %>%
+  kable_styling(full_width = TRUE) %>% 
+  add_footnote("Results are arranged in descending order by the size of the effec size.")
+```
+
+According to the results there is no significant interaction between gender and the educational level on none of the subscales.
+
+Lets look at the same results when we did not control for age and financial situation.
+
+```{r}
+isk_neme_scale_res %>% 
+  dplyr::filter(variable %in% met_subscales) %>% 
+  select(-anova_res, -interaction_res)
+```
+
+It seems like that none of the interactions were significant even before controlling for the age and financial situation.
+
+# References {-}
+
+<div id="refs"></div>
