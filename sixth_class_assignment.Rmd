@@ -1,11 +1,10 @@
 ---
-title: "Solution for the assignment of the fourth class"
+title: "Solution for the assignment of the sixth class"
 author: "Kovacs Marton"
 date: "9/29/2021"
 output:
   pdf_document:
     latex_engine: xelatex
-bibliography: multistat_references.bib
 ---
 
 ```{r setup, include=FALSE}
@@ -50,18 +49,14 @@ skimr::skim(processed) %>%
 First I create a table for all the combinations between the variables.
 
 ```{r}
-global <- select(processed, 31:36) %>% names()
-met <- select(processed, 25:29) %>% names
+global <- dplyr::select(processed, 31:36) %>% names()
+met <- dplyr::select(processed, 25:29) %>% names
 correlation_res <- tidyr::crossing(global, met)
 ```
 
 The I calculate the parametric correlation for each combination with a Pearson correlation, and the rank correlation with the Spearman method.
 
 ```{r}
-my_cor <- function(data, x, y, method) {
-  cor.test(data[[x]], data[[y]], method = method)
-}
-
 correlation_res <-
   correlation_res %>% 
   mutate(
@@ -84,7 +79,7 @@ correlation_res <-
   )
 
 correlation_res %>% 
-  select(-pearson_res, -spearman_res) %>% 
+  dplyr::select(-pearson_res, -spearman_res) %>% 
   arrange(desc(pearson_r))
 ```
 
@@ -94,13 +89,34 @@ The highest correlation was between _gjerz_ and the _jollet_ scales.
 
 # 3. What is the proportion of the negative and positive relationships between the resiliance scale and the total score of the Diener scale.
 
-To answer the question we first calculate the total score of the diener scale.
+I am not sure that I understand the question correctly, but I will calculate the correlation between the _resil_ variable and each item of the Diener flourishing scale. Than, I will look at the proportion of the positive and negative correlations based on the Pearson correlation coefficient.
 
 ```{r}
-diener_rezil_data <-
-  processed %>% 
-  mutate(diener_sum = diener1 + diener2 + diener3 + diener4 + diener5 + diener6 + diener7 + diener8) %>% 
-  select(rezil, diener_sum)
+diener <- dplyr::select(processed, contains("diener")) %>% names()
+rezil <- c("rezil")
+
+diener_rezil_res <- tidyr::crossing(rezil, diener)
+
+diener_rezil_res <-
+  diener_rezil_res %>% 
+  mutate(
+    res = map2(rezil, diener, 
+                     ~ my_cor(
+                        data = processed,
+                        x = .x,
+                        y = .y,
+                        method = "pearson")),
+    r = map_dbl(res, ~ pluck(.x, "estimate", "cor")),
+    r = round(r, 2),
+    valence = case_when(r > 0 ~ "positive",
+                        r < 0 ~ "negative")
+  ) %>% 
+  dplyr::select(-res) %>% 
+  arrange(desc(r))
+
+diener_rezil_res %>% 
+  count(valence) %>% 
+  mutate(prop = n / 8 * 100)
 ```
 
 # 4. How big is the Cronbachs alpha for the total score of the Diener scale?
@@ -168,7 +184,3 @@ cronbach.alpha(scale_data, CI = TRUE)
 
 psych::omega(scale_data, nfactors = 1)
 ```
-
-# References {-}
-
-<div id="refs"></div>

@@ -1,0 +1,202 @@
+---
+title: "Solution for the assignment of the seventh class"
+author: "Kovacs Marton"
+date: "9/29/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+# markdown settings
+knitr::opts_chunk$set(echo = TRUE)
+# loading necesarry packages
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(Hmisc)
+library(regclass)
+#loading custom R functions
+r_scripts <- list.files("R/", full.names = TRUE)
+walk(r_scripts, source)
+```
+
+# Importing data
+
+```{r}
+processed <- read_tsv("data/boldog_processed.tsv")
+```
+
+# Data exploration
+
+```{r}
+skimr::skim(processed) %>% 
+  kable()
+```
+
+# 1. Look for a variable thats variance is explained by the 8 Diener items by at least 65%.
+
+I will first calculate the total score for the Diener flourishing scale.
+
+```{r}
+diener_data <-
+  processed %>% 
+  mutate(diener_sum = diener1 + diener2 + diener3 + diener4 + diener5 + diener6 + diener7 + diener8)
+```
+
+For this task I am investigating only interval variables. To calculate the Rsquared I calculate the Pearson correlation coefficient and square it.
+
+```{r}
+interval_vars <- 
+  processed %>% 
+  select(26:50) %>% 
+  names()
+
+rsq <- function (data, x, y) cor(data[[x]], data[[y]]) ^ 2
+
+diener_res <-
+  tibble::tibble(
+    variable = interval_vars,
+    rsquared = map_dbl(variable,
+                  ~ rsq(diener_data, .x, "diener_sum"))
+    ) %>% 
+  mutate(
+    rsquared = round(rsquared, 2),
+    flag = case_when(rsquared >= .65 ~ TRUE,
+                     rsquared < .65 ~ FALSE)
+  ) %>% 
+  arrange(desc(rsquared))
+```
+
+The total score on the Diener 8 item scale only explains more than 65% of the variance of the _g_jerzpsz_ scale.
+
+# 2. Lets test whether adding aggodalom and ideges variables as main effects will increase the R2.
+
+To do this we have to create a linear regression model.
+
+```{r}
+m <- lm(g_jerzpsz ~ diener_sum + aggodalo + ideges, data = diener_data)
+
+summary(m)
+```
+
+Adding those two variables indeed increased the Rsquared to 0.6991.
+
+# 3. Transforming the kor variable
+
+```{r}
+kor_data <-
+  processed %>% 
+  dplyr::select(eletkora, index) %>% 
+  # bind_cols(kor_data, poly(kor_data$eletkora), degree = 3)
+  mutate(korz = scale(eletkora),
+         korz2 = korz^2,
+         korz3 = korz^3,
+         korz4 = korz^4)
+```
+
+Now, lets create a correlation matrix including these variables.
+
+```{r}
+Hmisc::rcorr(as.matrix(kor_data), type = "pearson")
+```
+
+# 4. Predicting PERMA by korz with polynomial regression. Which power has the largest effect on the outcome variable? Plot the results.
+
+```{r}
+polyreg_data <-
+  kor_data %>% 
+  left_join(., select(processed, perma, index), by = "index")
+
+m <- lm(perma ~ korz + korz2 + korz3 + korz4, data = polyreg_data)
+
+summary(m)
+```
+
+The second and fourth degree polynomial variables predicted the perma outcome variable significantly.
+
+# 5. Look for a variable that has a third degree polynomial relationsip with age. Plot the relationship.
+
+To look for the relationship I will look at the correlation between the interval variables and the third degree polynomial of age. I am looking for a significant relationship.
+
+```{r}
+third_data <-
+  processed %>% 
+  left_join(., kor_data, by = "index")
+
+third_res <-
+  tibble::tibble(
+    variable = interval_vars,
+    cor_res = map(variable, 
+                  ~ my_cor(
+                    data = third_data,
+                    x = .x,
+                    y = "korz3",
+                    method = "spearman"
+                  )),
+    cor_r = map_dbl(cor_res, ~ pluck(.x, "estimate", "rho")),
+    cor_p = map_dbl(cor_res, ~ pluck(.x, "p.value")),
+    flagged = case_when(cor_p <= 0.05 ~ TRUE,
+                        TRUE ~ FALSE)
+  ) %>% 
+  arrange(desc(cor_r))
+```
+
+The results show that 10 variables had a significant third degree polynomial relationship with the age variable. The following table is in descending order based on the Spearmans' rho.
+
+```{r}
+third_res %>% 
+  select(-cor_res)
+```
+
+Now, I would like to create scatterplot showing the relationship between these variables and age.
+
+```{r}
+third_plot <- 
+  third_res %>% 
+  dplyr::filter(flagged) %>% 
+  mutate(plot = map(variable, 
+                    ~ poly_plot(
+                      data = third_data,
+                      x = "korz3",
+                      y = .x
+                    ))
+         )
+
+third_plot$plot
+```
+
+# 6. Multiple linear regression where pelmeny is the outcome variable and Aggodalom, Ideges, Feszült, Nyugtalan are the predictor variables
+
+```{r}
+m <- lm(p_elmeny_percent ~ aggodalo + ideges + feszult + nyugtala, data = processed)
+
+summary(m)
+```
+
+The rsquared suggest that the predictor variables explain 25.85% of the variance in the outcome variable. 
+
+For the predictor variables the VIF is the highest for the _feszult_ variable.
+
+```{r}
+vif <- VIF(m)
+
+vif
+```
+
+And the tolerances are:
+
+```{r}
+1 / vif
+```
+
+Plotting the standardized residuals.
+
+```{r}
+to_plot <- broom::augment(m)
+
+ggplot(to_plot,
+       aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  papaja::theme_apa()
+```

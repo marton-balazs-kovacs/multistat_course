@@ -1,0 +1,370 @@
+---
+title: "Solution for the assignment of the fourth class"
+author: "Kovacs Marton"
+date: "9/29/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+# markdown settings
+knitr::opts_chunk$set(echo = TRUE)
+# loading necesarry packages
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(broom)
+library(psych)
+library(lavaan)
+library(ez)
+#loading custom R functions
+r_scripts <- list.files("R/", full.names = TRUE)
+walk(r_scripts, source)
+```
+
+# Introduction
+
+We run a study with my colleagues a few years ago that measured the mistakes that university student commit in their everyday life among some well know decision making skills that can affect the number of mistakes they experience. The study was never published but I will use its data for this assignment. The survey that we developed for measuring the mistakes called behavioral mistakes questionnaire (BAQ). We run an exploratory factor analysis before that identified two main factors behind the mistakes, planning error and inattention. We than calculated the mean frequency of committing a mistake by each factor for each participant.
+
+# Importing data
+
+```{r}
+# Descriptives
+baq_desc <- read_csv("data/final_task_data/Study1_BAQ_Descriptives_Processed.csv")
+
+# All the measures
+baq_ind <- read_csv("data/final_task_data/Study1_Individual_Processed.csv")
+```
+
+# Data exploration
+## For the descriptives
+
+```{r}
+skimr::skim(baq_desc) %>% 
+  kable()
+```
+
+The mean age for the participants was 21.4 with an SD of 2.38.
+
+Gender descriptives:
+
+```{r}
+baq_desc %>% distinct(id, .keep_all = TRUE) %>% count(sex)
+```
+
+Number of mistakes that were assigned to factors:
+
+```{r}
+baq_desc %>% filter(Factors != "Dropped") %>% distinct(story_id, .keep_all = T) %>% nrow()
+```
+
+## For the individual measures
+
+```{r}
+skimr::skim(baq_ind) %>% 
+  kable()
+```
+
+Other tests that were used:
+  * socialeconomic status
+  * BAQ
+    * Inattention subscale
+    * Planning error subscale
+  * CRT
+  * Raven test
+  * AOT
+  * SDS
+
+# Lets check out the correlations between the individual measures
+
+```{r}
+cor_data <- 
+  baq_ind %>% 
+  select(-id, -sex)
+
+Hmisc::rcorr(as.matrix(cor_data), type = "spearman")
+```
+
+There are 244 participants.
+
+There is a medium correlation between the subscales of the BAQ test with _r_ = 0.31.
+
+Interestingly BAQ summarized score does not have a correlation with any other measures. It seems like these measures do not have a relationship with the frequency of commiting mistakes in the everyday life.
+
+However, Inattention has a small negative correlation with IQ with _r_ = -0.18. Lets check out the significance.
+
+```{r}
+cor.test(cor_data$Inattention, cor_data$Raven_all, method = "spearman")
+```
+
+Participants with higher IQ commit less mistakes in their everyday life.
+
+And both subscales correlate moderately negatively with the SDS scale that measures whether the participant is likely to lie on these questionnaire with _r_ = -.20. So participants who tend to modify their scores to make a better impression about themselves give lower frequency scores for committing mistakes.
+
+# Lets calculate a Cronbachs alpha for the two subscales of BAQ.
+
+First we have to get the individual frequency scores for the different mistakes for each subscale from the descriptive table.
+
+Some participants did not answer to all the stories so I will drop them here.
+
+For planning error mistakes.
+
+```{r}
+planning_data <- 
+  baq_desc %>% 
+  filter(Factors == "PlanningError") %>% 
+  select(id, story_id, mist) %>% 
+  mutate(story_id = paste0("mistake", story_id)) %>% 
+  spread(key = story_id, value = mist) %>% 
+  filter_all(all_vars(!is.na(.))) %>% 
+  select(-id)
+```
+
+Number of participants left:
+
+```{r}
+nrow(planning_data)
+```
+
+Number of mistakes belonging to this factor.
+
+```{r}
+ncol(planning_data)
+```
+
+Calculating the Cronbachs alpha.
+
+```{r}
+ltm::cronbach.alpha(planning_data, CI = TRUE)
+```
+
+For inattention mistakes.
+
+```{r}
+inattention_data <- 
+  baq_desc %>% 
+  filter(Factors == "Inattention") %>% 
+  select(id, story_id, mist) %>% 
+  mutate(story_id = paste0("mistake", story_id)) %>% 
+  spread(key = story_id, value = mist) %>% 
+  filter_all(all_vars(!is.na(.))) %>% 
+  select(-id)
+```
+
+Number of participants left:
+
+```{r}
+nrow(inattention_data)
+```
+
+Number of mistakes belonging to this factor.
+
+```{r}
+ncol(inattention_data)
+```
+
+Calculating the Cronbachs alpha.
+
+```{r}
+ltm::cronbach.alpha(inattention_data, CI = TRUE)
+```
+
+
+# Lets see whether there is a difference between the gender in committing different types of mistakes.
+
+To test this I will run an ANOVA and I will look at the interaction between gender and the types of mistakes. As every participant answered multiple items from both types I am running a mixed ANOVA.
+
+First I have to transform the data to long format.
+
+```{r}
+anova_data <- 
+  baq_ind %>% 
+  select(id, sex, Inattention, PlanningError) %>% 
+  gather(key = "subscale", value = "score", -id, -sex) %>% 
+  arrange(id)
+```
+
+Lets run the ANOvA.
+
+```{r}
+ezANOVA(data = anova_data, dv = score, wid = id, between = sex, within = subscale, detailed = TRUE)
+```
+
+It seems like there is no interaction between gender and the different reasons for committing a mistake.
+
+There is a significant difference between the frequency of committing a mistake by the different subscales, but not because of gender.
+
+Lets visualize the results.
+
+```{r}
+anova_data %>% 
+  group_by(sex, subscale) %>% 
+  summarize(
+    mean = mean(score),
+    sd = sd(score),
+    n = n(),
+    se = sd / sqrt(n)
+  ) %>% 
+  ggplot() +
+  aes(
+    x = subscale,
+    y = mean,
+    shape = sex
+  ) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.2) +
+  papaja::theme_apa()
+```
+
+The errorbar on the figure is the SE.
+
+The difference between the genders in inattention is really small, however there is a difference for mistakes committed because of a planning error. The female participants committed less mistakes due to a planning error than the male participants.
+
+We should run a post hoc test for the gender for the Planning error subscale.
+
+```{r}
+post_hoc_data <- 
+  anova_data %>% 
+  filter(subscale == "PlanningError")
+
+pairwise.t.test(post_hoc_data$score, post_hoc_data$sex, p.adj = "bonf")
+```
+
+The pairwise test suggests that there is no significant difference in the frequency of commiting a mistake because of a planning error between genders.
+
+# Lets see if there is a difference between participants from different socialeconomic background in the AOT scores if we control for gender and age.
+
+For this we group the participants with different socialeconomic background to four groups.
+
+Lets look at the distribution of the SES scores. It ranges from 1 to 10, and with 10 meaning higher socialeconomic status.
+
+```{r}
+hist(baq_ind$ses_status)
+```
+
+The histogram is skewed to the right. We will try to group the participants to five groups. The sample sizes will be unequal but we want to make sure that one participant only belongs to one group.
+
+```{r}
+ses_data <- 
+  baq_ind %>% 
+  mutate(ses_group = case_when(ses_status %in% c(1, 2) ~ "g1",
+                               ses_status %in% c(3, 4) ~ "g2",
+                               ses_status %in% c(5, 6) ~ "g3",
+                               ses_status %in% c(7, 8) ~ "g4",
+                               ses_status %in% c(9, 10) ~ "g5")) %>% 
+  select(id, sex, age, ses_group, aot_all)
+```
+
+Lets look at the number of participants in each group.
+
+```{r}
+ses_data %>% 
+  count(ses_group)
+```
+
+I will drop the first two groups because of the low response rate.
+
+```{r}
+`%ni%` <- Negate(`%in%`)
+
+ses_data <- 
+  ses_data %>% 
+  filter(ses_group %ni% c("g1", "g2")) %>% 
+  mutate(id = as.factor(id),
+         ses_group = as.factor(ses_group),
+         sex = as.factor(sex))
+```
+
+Run the ANCOVA with covariates of age and gender.
+
+```{r}
+ezANOVA(data = ses_data, dv = aot_all, wid = id, between = ses_group, between_covariates = .(age, sex) , detailed = TRUE)
+```
+
+There is a not significant difference between participants from different social economic background on the Actively Open Minded scale with _F(2, 225)_ = 1.2, _p_ = 0.3. The eta square effect size estimate is 0.01.
+
+# CFA on a different data
+
+Finally, we collected data from a different group of participants. I will run a CFA in these results and check out the two factor design.
+
+Lets load this dataset.
+
+```{r}
+baq_desc_two <- read_csv("data/final_task_data/Study2_BAQ_Descriptives.csv")
+```
+
+# Exploratory data analysis
+
+The number of participants.
+
+```{r}
+baq_desc_two %>% 
+  distinct(id) %>% 
+  nrow()
+```
+
+The number of participants is quite low for CFA.
+
+# Data transformation
+
+I modify the data to be ready for the CFA.
+
+```{r}
+cfa_data <- 
+  baq_desc_two %>%
+  filter(Factors != "Dropped") %>% 
+  select(id, story_id, mist) %>% 
+  mutate(story_id = paste0("mistake", story_id)) %>% 
+  spread(key = story_id, value = mist) %>% 
+  filter_all(all_vars(!is.na(.))) %>% 
+  select(-id)
+```
+
+The number of participants remaining after transformation.
+
+```{r}
+nrow(cfa_data)
+```
+
+The sample size is really small now, we should keep that in mind as a limitation.
+
+Creating the model based on the results of the FA.
+
+Lets look at which story belongs to which factor based on the FA.
+
+```{r}
+baq_desc_two %>%
+  filter(Factors != "Dropped") %>%
+  select(id, story_id, Factors) %>% 
+  mutate(story_id = paste0("mistake", story_id)) %>% 
+  rename(mistake = story_id) %>% 
+  distinct(Factors, mistake) %>% 
+  arrange(Factors)
+```
+
+There are 5 items in the Inattention factor and four items in the planning error factor.
+
+```{r}
+model <- '
+inattention =~ mistake2 + mistake4 + mistake5 + mistake25 + mistake27
+planningerror =~ mistake1 + mistake3  + mistake10 + mistake17'
+```
+
+Running the CFA.
+
+```{r}
+cfa_res <- cfa(model, data = cfa_data)
+
+summary(cfa_res, standardized = TRUE, fit.measures = TRUE)
+```
+
+Both the CFI and the TLI are really small, and the RMSEA is nonsignificant, which indicates a bad fit. Howeverm the model test statistics are significant.
+
+Lets plot the results.
+
+```{r}
+semPlot::semPaths(cfa_res, "std")
+```
+
+The standardized model parameter estimates are quite low!

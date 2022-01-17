@@ -1,0 +1,130 @@
+---
+title: "Solution for the assignment of the eleventh class"
+author: "Kovacs Marton"
+date: "9/29/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+# markdown settings
+knitr::opts_chunk$set(echo = TRUE)
+# loading necesarry packages
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(broom)
+library(psych)
+library(lavaan)
+#loading custom R functions
+r_scripts <- list.files("R/", full.names = TRUE)
+walk(r_scripts, source)
+```
+
+# Importing data
+
+```{r}
+processed <- read_tsv("data/boldog_processed.tsv")
+```
+
+# Data exploration
+
+```{r}
+skimr::skim(processed) %>% 
+  kable()
+```
+
+# 1. Run CFA on the best model from the sixths task in the ninth assignments best model.
+
+Get the data for the model.
+
+```{r}
+vars <- c("p_elmeny_percent", "testi_fi", "alt_lelki", "alt_eg_all", "fizero", "arcocska", "aggodalo", "ideges", "feszult", "nyugtala")
+
+task_data <- 
+  processed %>% 
+  select(all_of(vars))
+```
+
+First I will run the EFA as I did not run it in the _ninth_assignment_.
+
+With 2 factors.
+
+```{r}
+efa2 <- fa(task_data, nfactors = 2, rotate = "varimax", fm = "ml")
+
+efa2
+```
+
+With 3 factors.
+
+```{r}
+efa3 <- fa(task_data, nfactors = 3, rotate = "varimax", fm = "ml")
+
+efa3
+```
+
+The BIC is smaller for the 2 factor model so I choose that one. However, three items have a high complexity and they load for both factors.
+
+Specifying the model for CFA.
+
+```{r}
+model <- '
+factor1 =~ p_elmeny_percent + arcocska + aggodalo + ideges + feszult + nyugtala
+factor2 =~ testi_fi + alt_lelki + fizero  + alt_eg_all'
+```
+
+Fitting the model.
+
+```{r}
+cfa <- cfa(model, data = task_data)
+
+summary(cfa, standardized = TRUE, fit.measures = TRUE)
+```
+
+# 2. How good is the model fit?
+
+The model has a significantly good fit with _X^2(34, 500)_ = 305.43, _p_ < 0.001.
+
+# 3. What about the other test statistics?
+
+The RMSEA = 0.129 CI90[0.116, 0.142] with _p_ < 0.001 for alpha <= 0.05.
+
+# 4. What about CFI, SRMR, and TLI?
+
+The Standardized Root Mean Square Residual (SRMR) is 0.129. The value ranges between 0 and 1, and as it is higher than the usually accepted 0.08 cutoff value, it does not indicate a good fit.
+
+The TLI has a penalty for adding more parameters. It is 0.893 which is below the .9 cutoff point for a good model.
+
+Tha CFI is usually highly correlated with the TLI. The value here is 0.919 which means it is not good either.
+
+# 5. Create a graph for the latent structure.
+
+Plotting the model with standardized model parameter estimates.
+
+```{r}
+semPlot::semPaths(cfa, "std")
+```
+
+# 6. Which variables should be dropped?
+
+I suspect that if I drop the two variables with high complexity the model will be better.
+
+Lets test it for fun!
+
+```{r}
+task_data_filtered <-
+  task_data %>% 
+  select(-alt_lelki, arcocska)
+
+model_filtered <- '
+factor1 =~ p_elmeny_percent + aggodalo + ideges + feszult + nyugtala
+factor2 =~ testi_fi + fizero  + alt_eg_all'
+
+cfa_filtered <- cfa(model_filtered, data = task_data_filtered)
+
+summary(cfa_filtered, standardized = TRUE, fit.measures = TRUE)
+```
+
+Indeed the CFI and TLI values are higher!

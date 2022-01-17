@@ -1,0 +1,119 @@
+---
+title: "Solution for the assignment of the tenth class"
+author: "Kovacs Marton"
+date: "9/29/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+# markdown settings
+knitr::opts_chunk$set(echo = TRUE)
+# loading necesarry packages
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(broom)
+library(psych)
+#loading custom R functions
+r_scripts <- list.files("R/", full.names = TRUE)
+walk(r_scripts, source)
+```
+
+# Importing data
+
+```{r}
+processed <- read_tsv("data/boldog_processed.tsv")
+```
+
+# Data exploration
+
+```{r}
+skimr::skim(processed) %>% 
+  kable()
+```
+
+# 1. Run PCA with varimax rotation
+
+Select the variables.
+
+```{r}
+vars <- c("p_elmeny_percent", "testi_fi", "alt_lelki", "alt_eg_all", "fizero", "arcocska", "aggodalo", "ideges", "feszult", "nyugtala")
+
+task_data <- 
+  processed %>% 
+  select(all_of(vars))
+```
+
+Create a correlation matrix for the scree plot.
+
+```{r}
+cor_matrix <- cor(task_data, use = "pairwise.complete.obs")
+
+cor_matrix
+```
+
+Make the scree plot.
+
+```{r}
+scree(cor_matrix)
+```
+
+We have two PCs with bigger than 1 Eigenvalues.
+
+Run the PCA.
+
+```{r}
+pca <- psych::principal(task_data, rotate = "varimax", nfactors = 2, scores = TRUE)
+
+pca
+```
+
+Based on the results the two PCs explain 71% of the variance. Not bad!
+
+# 2. Run EFA on the same variables
+
+```{r}
+efa <- fa(task_data, nfactors = 2, rotate = "varimax", fm = "pf")
+
+efa 
+```
+
+With varimax rotation looking for 2 factors, and with PAF estimation (due to the non normal distributions of the variables), I do not find any variables with lower communality than 0.25 (see h2).
+
+# 3. Check out KMO and Bartletts test results!
+
+```{r}
+KMO(cor_matrix)
+```
+
+The overall KMO score and the individual items scores are all good.
+
+```{r}
+cortest.bartlett(cor_matrix, n = 500, diag = FALSE)
+```
+
+The p value is so small that the test rounds it to 0. We can run an EFA the variables are good for factor analysis.
+
+# 4. Is the model bad based on significance?
+
+```{r}
+efa
+```
+
+The RMSEA is 0.093 CI90[0.079, 0109].
+
+_The total number of observations was  500  with Likelihood Chi Square =  139.67  with prob <  1.6e-17_
+
+# 5. Use a promax rotation
+
+```{r}
+efa_promax <- fa(task_data, nfactors = 2, rotate = "promax", fm = "pf")
+
+efa_promax
+```
+
+p_elmeny_percent, arcocska, aggodalo, ideges, feszult, nyugtala loads for the 1st factor, but with p_elmeny_percent loading negatively. alt_lelki and arcocska has a high complexity. 
+
+Here it is possible for the items to correlate with each other.

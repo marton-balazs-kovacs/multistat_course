@@ -1,11 +1,10 @@
 ---
-title: "Solution for the assignment of the fourth class"
+title: "Solution for the assignment of the fifth class"
 author: "Kovacs Marton"
 date: "9/29/2021"
 output:
   pdf_document:
     latex_engine: xelatex
-bibliography: multistat_references.bib
 ---
 
 ```{r setup, include=FALSE}
@@ -52,7 +51,7 @@ ordinal_vars <- select(processed, 8:24) %>% names()
 cat(paste('-', ordinal_vars), sep = '\n')
 ```
 
-As education \(_isk_\) has 4 different levels, I will run a Kruskall-Wallis test to investigate the differences between the groups on each scale.
+As education has 4 different levels, I will run a Kruskall-Wallis test to investigate the differences between the groups on each scale.
 
 First, I select only the before mentioned variables and convert the educational level variable to a factor variable.
 
@@ -268,8 +267,6 @@ ordinal_interaction_res %>%
 ```
 
 
-EXPLAIN
-
 # 4. Is there a difference between the means of the subscales of the Globalis Jollet scale?
 
 To answer this question first I select the needed variables and transform them to long format.
@@ -340,7 +337,3 @@ Plotting the results.
 ```{r}
 sto_dom_res$plot
 ```
-
-# References {-}
-
-<div id="refs"></div>

@@ -1,0 +1,153 @@
+---
+title: "Solution for the assignment of the ninth class"
+author: "Kovacs Marton"
+date: "9/29/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+# markdown settings
+knitr::opts_chunk$set(echo = TRUE)
+# loading necesarry packages
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(broom)
+library(psych)
+#loading custom R functions
+r_scripts <- list.files("R/", full.names = TRUE)
+walk(r_scripts, source)
+```
+
+# Importing data
+
+```{r}
+processed <- read_tsv("data/boldog_processed.tsv")
+```
+
+# Data exploration
+
+```{r}
+skimr::skim(processed) %>% 
+  kable()
+```
+
+# 1. Run an EFA with the following variables
+
+```{r}
+vars <- c("p_elmeny_percent", "testi_fi", "alt_lelki", "alt_eg_all", "fizero", "arcocska", "aggodalo", "ideges", "feszult", "nyugtala")
+
+efa_data <- 
+  processed %>% 
+  dplyr::select(all_of(vars))
+```
+
+We can calculate the correlation matrix first.
+
+```{r}
+cor_matrix <- cor(efa_data, use = "pairwise.complete.obs")
+```
+
+Now we can calculate the Eigenvalues from this.
+
+```{r}
+eigenvalues <- eigen(cor_matrix)
+
+eigenvalues$values
+```
+
+Now we can look at a screeplot to decide on the number of factors.
+
+```{r}
+scree(cor_matrix, factors = FALSE)
+```
+
+Based on the screeplot I will go with 2 factors. I will also use oblimin rotation. Using maximum likelihood estimation method.
+
+```{r}
+fa_res <- fa(efa_data, nfactors = 2, rotate = "oblimin", fm = "ml")
+
+fa_res
+```
+
+Which items that has a commonality (h2) lower than 0.25? No, there was not.
+
+The two factors explain 65% of the variance of the data based on Proportion Var values.
+
+# 2. How big is the KMO and Bartlett test?
+
+Check KMO.
+
+```{r}
+KMO(cor_matrix)
+```
+
+KMO can be used to check whether the data is adequate for factor analysis based on testing for common variance between variables.
+
+It seems like that both the individual and the summarized KMO tests are great.
+
+Check Barlett sphericity test.
+
+```{r}
+cortest.bartlett(cor_matrix, n = 500, diag = FALSE)
+```
+
+The p value can never be 0 but I suspect that the function rounded the value based on the size of the test statistics. Therefore, we can reject the null hypothesis, so we can perform an EFA.
+
+# 3. Is the model bad based on significance?
+
+```{r}
+fa_res
+```
+
+Seemingly the psych package only computes confidence interval for RMSEA to check the model fit. The results are RMSEA = 0.087 CI90[0.072, 0.103]. As the confidence interval does not include 0 I conclude that it is a good model fit.
+
+The function also returns the Chi square with a p value. The p value here is significant.
+
+_The total number of observations was  500  with Likelihood Chi Square =  124.08  with prob <  9.5e-15_
+
+# 4. Using a promax rotation
+
+Here I use a promax rotation therefore, I allow for correlation between the factors.
+
+```{r}
+fa_promax_res <- fa(efa_data, nfactors = 2, rotate = "promax", fm = "ml")
+
+fa_promax_res
+```
+
+Plotting the loadings.
+
+```{r}
+plot(fa_promax_res$loadings[,1], 
+     fa_promax_res$loadings[,2],
+     xlab = "Factor 1", 
+     ylab = "Factor 2",
+     ylim = c(-1,1),
+     xlim = c(-1,1),
+     main = "Promax rotation")
+
+text(
+  fa_promax_res$loadings[,1]-0.1,
+     fa_promax_res$loadings[,2]+0.1,
+     colnames(cor_matrix),
+     col="blue", cex = .8)
+
+abline(h = 0, v = 0)
+```
+
+It seems like that only two items have high complexity. p_elmeny_percent, aggoddalo, arcocska, idegesm feszult, and nyugtala belongs to the first factor. p_elmeny has a negative correlation with the factor. testi_fi, alt_lelki, alt_eg_all, fizero belongs to the second factor.
+
+# 5. Is PAF or ML better?
+
+If the variables are normally distributed we can run ML, however, if they are not we should rather run PAF.
+
+Lets check the normality of the variables.
+
+```{r}
+map(efa_data, shapiro.test)
+```
+
+All of them are significant so we should rather run PAF than ML.

@@ -5,7 +5,6 @@ date: "9/29/2021"
 output:
   pdf_document:
     latex_engine: xelatex
-bibliography: multistat_references.bib
 ---
 
 ```{r setup, include=FALSE}
@@ -362,7 +361,3 @@ isk_neme_scale_res %>%
 ```
 
 It seems like that none of the interactions were significant even before controlling for the age and financial situation.
-
-# References {-}
-
-<div id="refs"></div>

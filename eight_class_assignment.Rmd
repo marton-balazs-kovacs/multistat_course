@@ -1,0 +1,187 @@
+---
+title: "Solution for the assignment of the eight class"
+author: "Kovacs Marton"
+date: "9/29/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+# markdown settings
+knitr::opts_chunk$set(echo = TRUE)
+# loading necesarry packages
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(broom)
+library(psych)
+library(Hmisc)
+#loading custom R functions
+r_scripts <- list.files("R/", full.names = TRUE)
+walk(r_scripts, source)
+```
+
+# Importing data
+
+```{r}
+processed <- read_tsv("data/boldog_processed.tsv")
+```
+
+# Data exploration
+
+```{r}
+skimr::skim(processed) %>% 
+  kable()
+```
+
+# 1. PCA on Diener flourishing scale
+
+First, we select the variables of interest.
+
+```{r}
+diener_data <- dplyr::select(processed, contains("diener"))
+```
+
+In R, we can run the PCA with just one function. We can set the scale argument to true to scale our variables to unit variance and center the variables.
+
+```{r}
+pca <- 
+  diener_data %>% 
+  prcomp(scale = TRUE, center = TRUE)
+
+summary(pca)
+```
+
+As the data are standardized the standard deviation values for each principal component are the Eigenvalues.
+
+As we can see only the first PC has an Eigenvalue greater than 1.
+
+The first PC accounts for 71.02% of the variance, while the second PC accounts for the 6.13% of the variance.
+
+Together they explain 77.15% of the variance.
+
+Lets plot the results.
+
+```{r}
+pca %>%
+  tidy(matrix = "eigenvalues") %>% 
+  ggplot(aes(PC, percent)) +
+  geom_col(fill = "#56B4E9", alpha = 0.8) +
+  scale_x_continuous(breaks = 1:8) +
+  scale_y_continuous(
+    labels = scales::percent_format(),
+    expand = expansion(mult = c(0, 0.01))
+  ) +
+  theme_minimal()
+```
+
+# 2. PCA of MET
+
+First, we select the variables of interest.
+
+```{r}
+met_subscales <- c("jollet", "savor", "a_vhat", "onreg", "rezil")
+
+met_data <- dplyr::select(processed, all_of(met_subscales))
+```
+
+We run the PCA while standardizing the variables.
+
+```{r}
+pca_met <- 
+  met_data %>% 
+  prcomp(scale = TRUE, center = TRUE)
+
+summary(pca_met)
+```
+
+As we can see only the first PC has an Eigenvalue greater than 1, and it accounts for 59.54% of the variance.
+
+```{r}
+pca_met %>%
+  tidy(matrix = "eigenvalues") %>% 
+  ggplot(aes(PC, percent)) +
+  geom_col(fill = "#56B4E9", alpha = 0.8) +
+  scale_x_continuous(breaks = 1:5) +
+  scale_y_continuous(
+    labels = scales::percent_format(),
+    expand = expansion(mult = c(0, 0.01))
+  ) +
+  theme_minimal()
+```
+
+# 3. Use varimax and promax rotation on the first three principal components of the second task.
+
+I could use the `prcomp` function ad before, but we would have to use a cutting point for the Eigenvalues to only include 3 PC. Thus, I will use the `psych::principal` function, where I can set the number of PC in the function call.
+
+Thus, I run a new PCA with three components and varimax rotation. This function returns the standardized scores by default. The function calculates the correlation matrix by pairwise deletion of the missing values.
+
+```{r}
+pca_met_varimax <- psych::principal(met_data, rotate = "varimax", nfactors = 3, scores = TRUE)
+```
+
+Lets take a look at the Eigenvalues.
+
+```{r}
+pca_met_varimax$value
+```
+
+The rest of the results.
+
+```{r}
+pca_met_varimax
+```
+
+The factor loadings are quite small for _onreg_ and _rezil_ on RC1. Based on the communalities (h2) it seems that most of the variance explained by these two items can be explained by other items.
+
+The complexity scores suggest that _jollet_ and maybe _a_vhat_ the items measure more than one latent construct.
+
+The proportion var suggest that the RC1 explains 38% of the variance in the responses, while RC3 27% and RC2 21%.
+
+The fit based upon off diagonal values support a good fit.
+
+Now we should run the same analysis but allow factors to correlate, therefore we use an oblique rotation called promax.
+
+```{r}
+pca_met_promax <- psych::principal(met_data, rotate = "promax", nfactors = 3, scores = TRUE)
+```
+
+Lets see the results of this solution.
+
+```{r}
+pca_met_promax
+```
+
+Allowing for correlation reduced the complexity and we have a much cleaner latent structure than before with varimax. RC1 highly correlates (0.66) with RC3 and only medium wiht RC2 (0.29), there is a medium to high correlation (0.42) between RC3 and RC2.
+
+# 4. Save the factors from the promax rotation and correlate the with the PERMA test's items. Which items has the highest correlattion with the first factor.
+
+Calculating the factor scores.
+
+```{r}
+scores <- factor.scores(met_data, pca_met_promax)
+
+scores <- as.data.frame(scores$scores)
+```
+
+Binding calculated scores to the original data.
+
+```{r}
+perma_vars <- c("p_poz_erz", "p_elmely", "p_poz_kapc", "p_ert_cel", "p_telj", "p_boldog", "p_egeszs", "p_neg_erz", "p_magany")
+
+processed_scores <- 
+  processed %>% 
+  bind_cols(., scores) %>% 
+  select(RC1, RC2, RC3, all_of(perma_vars))
+```
+
+Running the correlations.
+
+```{r}
+corr_matrix <- rcorr(as.matrix(processed_scores))
+
+corr_matrix$r
+```
+
+Interestingly there is a strong correlation between almost all of the variables.The strongest correlation is between RC1 and and the PERMA items is with _p_poz_erz_ (r = 0.69)
